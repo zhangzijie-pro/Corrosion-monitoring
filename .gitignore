@@ -17,6 +17,7 @@ dataset/
 dataset_all/
 dataset_all_augmented/
 external_negative_cache/
+external_corrosion_cache/
 
 # Training / inference outputs
 runs/
