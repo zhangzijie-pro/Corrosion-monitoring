@@ -1,0 +1,57 @@
+seed: 42
+device: auto
+
+data:
+  root: dataset_all_augmented
+  layout: dataset_all
+  train_splits: [train]
+  val_splits: [valid]
+  image_size: [512, 512]
+  mask_threshold: 127
+  mask_mode: indexed_multiclass
+
+model:
+  # Set arch to "unet" to train UNet with CrossEntropyLoss and UNet metrics.
+  arch: crt
+  # CRT uses one binary logit. UNet will use two class logits by default.
+  num_classes: 6
+  in_channels: 3
+  embed_dims: [64, 128, 320, 512]
+  depths: [2, 2, 4, 2]
+  num_heads: [1, 2, 5, 8]
+  sr_ratios: [8, 4, 2, 1]
+  encoder_dim: 256
+  encoder_depth: 3
+  encoder_heads: 8
+  token_max_size: 32
+  decoder_depth: 3
+  decoder_heads: 8
+  num_queries: 8
+  head_dim: 128
+  dropout: 0.1
+  drop_path: 0.1
+
+loss:
+  ce_weight: 0.45
+  dice_weight: 0.40
+  focal_weight: 0.15
+  focal_gamma: 2.0
+  background_dice_weight: 0.25
+  # class 0 is background; classes 1-5 are corrosion severity levels.
+  class_weights: [0.35, 1.20, 1.30, 1.45, 1.65, 1.90]
+
+eval:
+  metric_type: multiclass
+  threshold: 0.65
+  boundary_tolerance: 4
+
+train:
+  epochs: 240
+  batch_size: 4
+  num_workers: 0
+  lr: 0.0001
+  min_lr: 0.000001
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  amp: true
+  output_dir: runs/crt_dataset_all_multiclass

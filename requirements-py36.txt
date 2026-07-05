@@ -1,0 +1,15 @@
+numpy>=1.19.5
+Pillow>=8.4.0
+PyYAML>=5.4.1
+opencv-python-headless>=4.5.5.64
+matplotlib>=3.3.4
+tqdm>=4.64.1
+scipy>=1.5.4
+Flask>=1.1.4
+Werkzeug>=1.0.1
+onnx>=1.10.2
+onnxruntime>=1.10.0
+
+# Install PyTorch separately according to your CUDA / CPU environment.
+# Example CPU build for Python 3.6:
+# pip install torch==1.10.2+cpu torchvision==0.11.3+cpu -f https://download.pytorch.org/whl/cpu/torch_stable.html
