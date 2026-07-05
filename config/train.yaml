@@ -42,7 +42,7 @@ loss:
 
 eval:
   metric_type: multiclass
-  threshold: 0.65
+  threshold: 0.45
   boundary_tolerance: 4
 
 train:

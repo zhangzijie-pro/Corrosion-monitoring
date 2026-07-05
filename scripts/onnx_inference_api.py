@@ -53,7 +53,13 @@ def load_metadata(path):
         "input_name": "image",
         "output_name": "logits",
         "normalization": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
-        "postprocess": {"threshold": 0.65, "min_area_percent": 0.05, "min_component_area_ratio": 0.0002},
+        "postprocess": {
+            "threshold": 0.45,
+            "threshold_mode": "foreground_probability_sum",
+            "background_margin": -0.05,
+            "min_area_percent": 0.02,
+            "min_component_area_ratio": 0.0001,
+        },
         "class_names": DEFAULT_CLASS_NAMES,
     }
 
@@ -119,17 +125,20 @@ def remove_small_components(class_map, min_component_area):
     return cleaned
 
 
-def threshold_class_map(prob_np, metadata):
-    post = metadata.get("postprocess", {})
-    threshold = float(post.get("threshold", 0.65))
-    min_area_percent = float(post.get("min_area_percent", 0.05))
-    min_component_area_ratio = float(post.get("min_component_area_ratio", 0.0002))
+def threshold_class_map(prob_np, metadata, postprocess_override=None):
+    post = dict(metadata.get("postprocess", {}))
+    if postprocess_override:
+        post.update(postprocess_override)
+    threshold = float(post.get("threshold", 0.45))
+    min_area_percent = float(post.get("min_area_percent", 0.02))
+    min_component_area_ratio = float(post.get("min_component_area_ratio", 0.0001))
+    background_margin = float(post.get("background_margin", -0.05))
 
     bg = prob_np[0]
     fg_probs = prob_np[1:]
-    fg_conf = np.max(fg_probs, axis=0)
+    fg_mass = np.sum(fg_probs, axis=0)
     fg_cls = np.argmax(fg_probs, axis=0).astype(np.uint8) + 1
-    class_map = np.where((fg_conf >= threshold) & (fg_conf > bg), fg_cls, 0).astype(np.uint8)
+    class_map = np.where((fg_mass >= threshold) & (fg_mass >= (bg + background_margin)), fg_cls, 0).astype(np.uint8)
     min_area = max(1, int(round(class_map.size * min_component_area_ratio)))
     class_map = remove_small_components(class_map, min_area)
     area_percent = 100.0 * float(np.mean(class_map > 0))
@@ -200,13 +209,18 @@ class ONNXCorrosionPredictor(object):
         self.input_name = self.metadata.get("input_name") or self.session.get_inputs()[0].name
         self.output_name = self.metadata.get("output_name") or self.session.get_outputs()[0].name
 
-    def predict(self, image, include_overlay=False):
+    def predict(self, image, include_overlay=False, postprocess_override=None):
         tensor = preprocess_image(image, self.metadata)
         logits = self.session.run([self.output_name], {self.input_name: tensor})[0]
         probs = softmax(logits, axis=1)[0]
-        class_map = threshold_class_map(probs, self.metadata)
-        confidence_map = np.max(probs, axis=0).astype(np.float32)
+        post = dict(self.metadata.get("postprocess", {}))
+        if postprocess_override:
+            post.update(postprocess_override)
+        metadata = dict(self.metadata)
+        metadata["postprocess"] = post
+        class_map = threshold_class_map(probs, metadata)
         corrosion_probability = (1.0 - probs[0]).astype(np.float32)
+        confidence_map = corrosion_probability
         corrosion = class_map > 0
         background = ~corrosion
         total_pixels = int(class_map.size)
@@ -220,10 +234,14 @@ class ONNXCorrosionPredictor(object):
             "num_classes": int(probs.shape[0]),
             "image_width": int(class_map.shape[1]),
             "image_height": int(class_map.shape[0]),
-            "threshold": float(self.metadata.get("postprocess", {}).get("threshold", 0.65)),
+            "threshold": float(post.get("threshold", 0.45)),
+            "threshold_mode": post.get("threshold_mode", "foreground_probability_sum"),
+            "background_margin": float(post.get("background_margin", -0.05)),
             "total_pixels": total_pixels,
             "raw_corrosion_pixels": int((np.argmax(probs, axis=0) > 0).sum()),
             "raw_corrosion_area_percent": 100.0 * int((np.argmax(probs, axis=0) > 0).sum()) / max(1, total_pixels),
+            "raw_foreground_mass_pixels": int((corrosion_probability >= float(post.get("threshold", 0.45))).sum()),
+            "raw_foreground_mass_area_percent": 100.0 * int((corrosion_probability >= float(post.get("threshold", 0.45))).sum()) / max(1, total_pixels),
             "corrosion_pixels": corrosion_pixels,
             "corrosion_area_percent": area_percent,
             "corrosion_level": int(level),
@@ -235,6 +253,8 @@ class ONNXCorrosionPredictor(object):
             "background_confidence": float(probs[0][background].mean()) if np.any(background) else 0.0,
             "mean_probability": float(corrosion_probability.mean()),
             "max_probability": float(corrosion_probability.max()),
+            "mean_foreground_mass": float(corrosion_probability.mean()),
+            "max_foreground_mass": float(corrosion_probability.max()),
             "corrosion_blocks": summarize_blocks(class_map, confidence_map, class_names),
         }
         report["detection_confidence"] = report["foreground_confidence"] if corrosion_pixels else report["background_confidence"]
@@ -246,7 +266,14 @@ class ONNXCorrosionPredictor(object):
 def run_cli(args):
     predictor = ONNXCorrosionPredictor(args.model, args.metadata)
     image = Image.open(args.input).convert("RGB")
-    report = predictor.predict(image, include_overlay=args.include_overlay)
+    override = {}
+    if args.threshold is not None:
+        override["threshold"] = args.threshold
+    if args.min_area_percent is not None:
+        override["min_area_percent"] = args.min_area_percent
+    if args.background_margin is not None:
+        override["background_margin"] = args.background_margin
+    report = predictor.predict(image, include_overlay=args.include_overlay, postprocess_override=override)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
@@ -271,7 +298,12 @@ def create_app(model_path, metadata_path=None):
         try:
             image = Image.open(file_obj.stream).convert("RGB")
             include_overlay = request.form.get("include_overlay", "1").lower() not in ("0", "false", "no")
-            return jsonify(predictor.predict(image, include_overlay=include_overlay))
+            override = {}
+            for key in ("threshold", "min_area_percent", "min_component_area_ratio", "background_margin"):
+                value = request.form.get(key)
+                if value not in (None, ""):
+                    override[key] = float(value)
+            return jsonify(predictor.predict(image, include_overlay=include_overlay, postprocess_override=override))
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
@@ -285,6 +317,9 @@ def main():
     parser.add_argument("--input", help="Image path for CLI prediction.")
     parser.add_argument("--output", help="Optional JSON output path for CLI prediction.")
     parser.add_argument("--include-overlay", action="store_true")
+    parser.add_argument("--threshold", type=float, help="Foreground probability-sum threshold.")
+    parser.add_argument("--min-area-percent", type=float, help="Suppress detections below this image area percent.")
+    parser.add_argument("--background-margin", type=float, help="Allow foreground mass to be this margin above background; negative is more sensitive.")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=9100)

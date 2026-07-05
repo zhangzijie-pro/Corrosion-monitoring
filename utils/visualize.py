@@ -271,13 +271,19 @@ def _remove_small_class_components(class_map, min_component_area):
     return cleaned
 
 
-def _threshold_multiclass_map(prob_np, threshold=0.65, min_component_area_ratio=0.0002, min_area_percent=0.05):
+def _threshold_multiclass_map(
+    prob_np,
+    threshold=0.45,
+    min_component_area_ratio=0.0001,
+    min_area_percent=0.02,
+    background_margin=-0.05,
+):
     background_prob = prob_np[0]
     foreground_probs = prob_np[1:]
-    foreground_conf = np.max(foreground_probs, axis=0)
+    foreground_mass = np.sum(foreground_probs, axis=0)
     foreground_class = np.argmax(foreground_probs, axis=0).astype(np.uint8) + 1
     class_map = np.where(
-        (foreground_conf >= float(threshold)) & (foreground_conf > background_prob),
+        (foreground_mass >= float(threshold)) & (foreground_mass >= (background_prob + float(background_margin))),
         foreground_class,
         0,
     ).astype(np.uint8)
@@ -289,19 +295,30 @@ def _threshold_multiclass_map(prob_np, threshold=0.65, min_component_area_ratio=
     return class_map
 
 
-def build_multiclass_report(original, logits, threshold=0.65, min_component_area_ratio=0.0002, min_area_percent=0.05):
+def build_multiclass_report(
+    original,
+    logits,
+    threshold=0.45,
+    min_component_area_ratio=0.0001,
+    min_area_percent=0.02,
+    background_margin=-0.05,
+):
     logits = F.interpolate(logits, size=(original.height, original.width), mode="bilinear", align_corners=False)
     probs = torch.softmax(logits, dim=1)
     prob_np = probs.squeeze(0).detach().cpu().numpy()
     raw_class_map = np.argmax(prob_np, axis=0).astype(np.uint8)
+    foreground_mass = np.sum(prob_np[1:], axis=0).astype(np.float32)
+    foreground_class_confidence = np.max(prob_np[1:], axis=0).astype(np.float32)
+    raw_foreground_mass_mask = foreground_mass >= float(threshold)
     class_map = _threshold_multiclass_map(
         prob_np,
         threshold=threshold,
         min_component_area_ratio=min_component_area_ratio,
         min_area_percent=min_area_percent,
+        background_margin=background_margin,
     )
-    confidence_map = np.max(prob_np, axis=0).astype(np.float32)
-    corrosion_probability = (1.0 - prob_np[0]).astype(np.float32)
+    confidence_map = foreground_mass
+    corrosion_probability = foreground_mass
 
     corrosion = class_map > 0
     background = ~corrosion
@@ -320,7 +337,8 @@ def build_multiclass_report(original, logits, threshold=0.65, min_component_area
         str(cls): 100.0 * pixels / max(1, total_pixels)
         for cls, pixels in ((cls, level_pixels[str(cls)]) for cls in range(1, num_classes))
     }
-    foreground_confidence = float(confidence_map[corrosion].mean()) if np.any(corrosion) else 0.0
+    foreground_confidence = float(foreground_mass[corrosion].mean()) if np.any(corrosion) else 0.0
+    foreground_class_confidence_mean = float(foreground_class_confidence[corrosion].mean()) if np.any(corrosion) else 0.0
     background_confidence = float(prob_np[0][background].mean()) if np.any(background) else 0.0
     detection_confidence = foreground_confidence if np.any(corrosion) else background_confidence
 
@@ -328,16 +346,23 @@ def build_multiclass_report(original, logits, threshold=0.65, min_component_area
         "model_output_type": "multiclass",
         "num_classes": num_classes,
         "threshold": float(threshold),
+        "threshold_mode": "foreground_probability_sum",
+        "background_margin": float(background_margin),
         "min_area_percent": float(min_area_percent),
         "detection_confidence": detection_confidence,
         "corrosion_confidence_mean": foreground_confidence,
         "foreground_confidence": foreground_confidence,
+        "foreground_class_confidence": foreground_class_confidence_mean,
         "background_confidence": background_confidence,
         "mean_probability": float(corrosion_probability.mean()),
         "max_probability": float(corrosion_probability.max()),
+        "mean_foreground_mass": float(foreground_mass.mean()),
+        "max_foreground_mass": float(foreground_mass.max()),
         "total_pixels": total_pixels,
         "raw_corrosion_pixels": int((raw_class_map > 0).sum()),
         "raw_corrosion_area_percent": 100.0 * int((raw_class_map > 0).sum()) / max(1, total_pixels),
+        "raw_foreground_mass_pixels": int(raw_foreground_mass_mask.sum()),
+        "raw_foreground_mass_area_percent": 100.0 * int(raw_foreground_mass_mask.sum()) / max(1, total_pixels),
         "corrosion_pixels": corrosion_pixels,
         "corrosion_area_percent": area_percent,
         "corrosion_level": level_info["level"],
@@ -424,7 +449,7 @@ def save_prediction_visual(
     logits,
     output_dir,
     stem,
-    threshold=0.65,
+    threshold=0.45,
 ):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -500,7 +525,7 @@ def save_prediction_visual(
 def api_save_prediction_visual(
     original,
     logits,
-    threshold=0.65,
+    threshold=0.45,
 ):
     if logits.shape[1] > 2:
         report = build_multiclass_report(original, logits, threshold=threshold)

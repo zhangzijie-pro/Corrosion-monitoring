@@ -17,13 +17,17 @@ from utils.torch_compat import autocast_for_device, inference_context
 from utils.visualize import SEVERITY_COLORS, build_multiclass_report
 
 
-DEFAULT_CHECKPOINT = "runs/crt_dataset_all_multiclass_neg/best.pt"
+DEFAULT_CHECKPOINT = "runs/pt/best.pt"
 CHECKPOINT_PATH = Path(os.environ.get("MODEL_CHECKPOINT", DEFAULT_CHECKPOINT))
 MULTICLASS_CHECKPOINT_PATH = Path(
     os.environ.get("MULTICLASS_MODEL_CHECKPOINT", os.environ.get("MODEL_CHECKPOINT", DEFAULT_CHECKPOINT))
 )
 DEVICE_NAME = os.environ.get("MODEL_DEVICE", "auto")
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "20"))
+DEFAULT_POSTPROCESS_THRESHOLD = float(os.environ.get("POSTPROCESS_THRESHOLD", "0.45"))
+DEFAULT_POSTPROCESS_MIN_AREA_PERCENT = float(os.environ.get("POSTPROCESS_MIN_AREA_PERCENT", "0.02"))
+DEFAULT_POSTPROCESS_MIN_COMPONENT_AREA_RATIO = float(os.environ.get("POSTPROCESS_MIN_COMPONENT_AREA_RATIO", "0.0001"))
+DEFAULT_POSTPROCESS_BACKGROUND_MARGIN = float(os.environ.get("POSTPROCESS_BACKGROUND_MARGIN", "-0.05"))
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
@@ -262,6 +266,13 @@ def _multiclass_overlay_image(original, class_map):
     return Image.fromarray(np.clip(overlay, 0, 255).astype(np.uint8))
 
 
+def _float_form_value(name, default):
+    value = request.form.get(name)
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
 @app.get("/")
 def index():
     return multiclass_index()
@@ -301,10 +312,20 @@ def predict_multiclass():
             return jsonify({"error": "The configured multiclass checkpoint did not produce multiclass logits."}), 400
 
         _, cfg, _ = _load_model_for_path(MULTICLASS_CHECKPOINT_PATH)
+        threshold = _float_form_value("threshold", DEFAULT_POSTPROCESS_THRESHOLD)
+        min_area_percent = _float_form_value("min_area_percent", DEFAULT_POSTPROCESS_MIN_AREA_PERCENT)
+        min_component_area_ratio = _float_form_value(
+            "min_component_area_ratio",
+            DEFAULT_POSTPROCESS_MIN_COMPONENT_AREA_RATIO,
+        )
+        background_margin = _float_form_value("background_margin", DEFAULT_POSTPROCESS_BACKGROUND_MARGIN)
         report = build_multiclass_report(
             original,
             logits,
-            threshold=cfg.get("eval", {}).get("threshold", 0.65),
+            threshold=threshold,
+            min_area_percent=min_area_percent,
+            min_component_area_ratio=min_component_area_ratio,
+            background_margin=background_margin,
         )
         public_report = _public_report(report)
         overlay = _multiclass_overlay_image(original, report["_class_map"])
