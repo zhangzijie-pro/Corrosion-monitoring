@@ -115,7 +115,7 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
-    parser.add_argument("--opset", type=int, default=17)
+    parser.add_argument("--opset", type=int, default=15)
     parser.add_argument("--static-batch", action="store_true", help="Do not export dynamic batch axis.")
     parser.add_argument("--export-image-size", type=int, help="Override square image size for ONNX export.")
     parser.add_argument("--no-constant-folding", action="store_true")

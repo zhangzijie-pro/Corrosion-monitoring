@@ -1,4 +1,3 @@
-from .segmentation import SegmentationMeter
-from .unet_metrics import SegmentationMetric, UNetSegmentationMeter
+from .segmentation import MulticlassSegmentationMeter, SegmentationMeter
 
-__all__ = ["SegmentationMeter", "SegmentationMetric", "UNetSegmentationMeter"]
+__all__ = ["MulticlassSegmentationMeter", "SegmentationMeter"]

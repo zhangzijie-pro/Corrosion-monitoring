@@ -9,7 +9,7 @@ import yaml
 
 from data import build_dataloaders
 from engine import evaluate, train_one_epoch
-from loss import CrossEntropySegmentationCriterion, MulticlassSegmentationCriterion, SegmentationCriterion
+from loss import MulticlassSegmentationCriterion, SegmentationCriterion
 from model import build_model
 from utils import get_device, seed_everything
 from utils.checkpoint import save_checkpoint
@@ -39,33 +39,21 @@ def model_arch(cfg):
     return str(cfg["model"].get("arch", "crt")).lower().replace("_", "-")
 
 
-def is_unet_arch(arch):
-    if arch in {"unet", "u-net"}:
-        return True
-    return False
-
-
 def metric_type_for_arch(arch, num_classes=2):
     if int(num_classes) > 2:
         return "multiclass"
-    if is_unet_arch(arch):
-        return "unet"
     return "segmentation"
 
 
 def build_criterion_for_arch(arch, cfg, num_classes=1):
     if int(num_classes) > 2:
         return MulticlassSegmentationCriterion(**cfg.get("loss", {}))
-    if is_unet_arch(arch):
-        return CrossEntropySegmentationCriterion()
     return SegmentationCriterion(**cfg.get("loss", {}))
 
 
 def best_metric_key_for_arch(arch, num_classes=1):
     if int(num_classes) > 2:
-        return "Mean Foreground IoU"
-    if is_unet_arch(arch):
-        return "Mean Intersection over Union(mIoU)"
+        return "Foreground Binary IoU"
     return "iou"
 
 
@@ -84,9 +72,13 @@ def format_epoch_metrics(epoch, metrics, best_key):
         f"train_loss={metrics['train_loss']:.4f}",
         f"val_loss={metrics['val_loss']:.4f}",
     ]
+    emitted = set()
     for key in (
         best_key,
         "Mean Present Class IoU",
+        "Foreground Binary IoU",
+        "Foreground Binary Dice",
+        "Foreground Binary Recall",
         "Mean Intersection over Union(mIoU)",
         "Pixel Accuracy",
         "Mean Pixel Accuracy",
@@ -96,8 +88,9 @@ def format_epoch_metrics(epoch, metrics, best_key):
         "dice",
         "boundary_f1",
     ):
-        if key in metrics:
+        if key in metrics and key not in emitted:
             parts.append(f"{key}={metrics[key]:.4f}")
+            emitted.add(key)
     parts.append(f"lr={metrics['lr']:.2e}")
     return " | ".join(parts)
 
@@ -160,7 +153,7 @@ def main():
     best_score = -math.inf
     best_metric_key = best_metric_key_for_arch(arch, num_classes=num_classes)
     metric_type = metric_type_for_arch(arch, num_classes=num_classes)
-    if not is_unet_arch(arch) and int(num_classes) <= 2:
+    if int(num_classes) <= 2:
         metric_type = cfg.get("eval", {}).get("metric_type", metric_type)
     for epoch in range(1, train_cfg.get("epochs", 50) + 1):
         train_metrics = train_one_epoch(

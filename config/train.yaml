@@ -11,9 +11,7 @@ data:
   mask_mode: indexed_multiclass
 
 model:
-  # Set arch to "unet" to train UNet with CrossEntropyLoss and UNet metrics.
   arch: crt
-  # CRT uses one binary logit. UNet will use two class logits by default.
   num_classes: 6
   in_channels: 3
   embed_dims: [64, 128, 320, 512]

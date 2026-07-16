@@ -19,10 +19,6 @@ def infer_model_cfg_from_state_dict(cfg, state_dict):
     model_cfg = dict(cfg["model"])
     arch = str(model_cfg.pop("arch", "crt")).lower()
     num_classes = model_cfg.pop("num_classes", 1)
-    out_conv_key = next((key for key in state_dict if key.endswith("out_conv.weight")), None)
-    if arch in {"unet", "u-net"} and out_conv_key is not None:
-        num_classes = int(state_dict[out_conv_key].shape[0])
-        model_cfg["out_channels"] = num_classes
     return arch, num_classes, model_cfg
 
 

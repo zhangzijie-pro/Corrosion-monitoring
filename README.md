@@ -6,7 +6,7 @@
 [![ONNX](https://img.shields.io/badge/ONNX-Runtime-green)](https://onnxruntime.ai/)
 [![Task](https://img.shields.io/badge/Task-Corrosion%20Monitoring-orange)](https://github.com/zhangzijie-pro/Corrosion-monitoring)
 
-> Corrosion monitoring for ship and steel surface inspection, with 0-5 semantic corrosion segmentation, negative-sample suppression, ONNX export, and Python 3.6 edge deployment support.
+> Corrosion monitoring for ship and steel surface inspection, with 0-5 semantic corrosion segmentation, external corrosion dataset import, ONNX export, and Python 3.6 edge deployment support.
 
 ---
 
@@ -14,7 +14,7 @@
 
 - Multi-class corrosion segmentation: class `0` is background; classes `1-5` represent increasing corrosion severity.
 - HSI / HSV severity labeling: converts binary corrosion annotations into fine-grained masks using color, brightness, red-brown tendency, and texture features.
-- Negative-sample training: all-background images reduce false positives on ordinary non-corrosion images.
+- External corrosion data import: maps public condition-state masks into the project 0-5 severity label space.
 - CRT backbone: transformer-style corrosion recognition model with encoder / decoder segmentation head.
 - Robust post-processing: foreground probability thresholding, background-priority filtering, tiny-component removal, and minimum-area suppression.
 - ONNX deployment: exports `.pt` checkpoints to ONNX opset 15 for Python 3.6 ONNXRuntime.
@@ -28,7 +28,6 @@
 Corrosion-monitoring/
 |-- add_dataset.py                  # Convert dataset/{HiRes,LoRes} into train/valid/test masks
 |-- augment_dataset.py              # Offline image/mask augmentation
-|-- add_negative_samples.py         # Add all-background negative samples
 |-- train_segmentation.py           # Main training script
 |-- validate_segmentation.py        # Validate a checkpoint
 |-- test_multiclass_model.py        # Multiclass evaluation and prediction smoke test
@@ -44,11 +43,9 @@ Corrosion-monitoring/
 |-- loss/
 |   `-- segmentation_loss.py        # Binary and multiclass losses
 |-- metrics/
-|   |-- segmentation.py
-|   `-- unet_metrics.py             # Multiclass confusion-matrix metrics
+|   `-- segmentation.py             # Binary and multiclass segmentation metrics
 |-- model/
 |   |-- CRT.py                      # Corrosion Recognition Transformer
-|   |-- Unet.py                     # Optional UNet baseline
 |   |-- backbone.py
 |   |-- encode.py
 |   |-- decode.py
@@ -147,30 +144,20 @@ python augment_dataset.py \
 
 `indexed_multiclass` preserves class IDs `0-5` with nearest-neighbor mask transforms.
 
-### 5. Add Negative Samples
+### 5. Import External Corrosion Data
 
-Negative samples teach the model to output background on unrelated images.
+The recommended external source is the Virginia Tech corrosion condition-state semantic segmentation dataset. Use the 512x512 `Train/Test` split from that package:
 
 ```bash
-python add_negative_samples.py \
-  --target-root dataset_all_augmented \
-  --count 300 \
-  --train-ratio 0.8 \
+python scripts/import_vt_corrosion_dataset.py \
+  --source-root external_corrosion_cache/vt_corrosion_condition_state \
+  --target-root dataset_all \
   --valid-ratio 0.1 \
-  --test-ratio 0.1 \
   --seed 42 \
-  --source coco \
-  --image-size 512 \
   --overwrite
 ```
 
-Each negative image receives a same-size all-black mask: every pixel is class `0`.
-
-If COCO download is not suitable for your machine, use:
-
-```bash
-python add_negative_samples.py --source random --target-root dataset_all_augmented --count 300
-```
+The importer maps condition states into this project label space: background/good=`0`, fair=`2`, poor=`4`, severe=`5`. The original ship corrosion masks still provide HSI/KMeans-generated classes `1-5`.
 
 ---
 
@@ -189,7 +176,7 @@ python train_segmentation.py \
   --config config/train.yaml \
   --data-root dataset_all_augmented \
   --epochs 2 \
-  --output-dir runs/crt_dataset_all_multiclass_neg_smoke
+  --output-dir runs/crt_corrosion_multisource_smoke
 ```
 
 Full training:
@@ -198,7 +185,7 @@ Full training:
 python train_segmentation.py \
   --config config/train.yaml \
   --data-root dataset_all_augmented \
-  --output-dir runs/crt_dataset_all_multiclass_neg
+  --output-dir runs/crt_corrosion_multisource
 ```
 
 Training outputs:
@@ -220,7 +207,7 @@ Run validation metrics:
 
 ```bash
 python validate_segmentation.py \
-  --checkpoint runs/crt_dataset_all_multiclass_neg/best.pt \
+  --checkpoint runs/crt_corrosion_multisource/best.pt \
   --device auto
 ```
 
@@ -236,6 +223,8 @@ python test_multiclass_model.py \
 
 Important metrics:
 
+- `Foreground Binary IoU`
+- `Foreground Binary Dice`
 - `Mean Foreground IoU`
 - `Mean Present Class IoU`
 - `Mean Intersection over Union(mIoU)`
@@ -249,8 +238,8 @@ Important metrics:
 PyTorch checkpoint API:
 
 ```bash
-MODEL_CHECKPOINT=runs/crt_dataset_all_multiclass_neg/best.pt \
-MULTICLASS_MODEL_CHECKPOINT=runs/crt_dataset_all_multiclass_neg/best.pt \
+MODEL_CHECKPOINT=runs/crt_corrosion_multisource/best.pt \
+MULTICLASS_MODEL_CHECKPOINT=runs/crt_corrosion_multisource/best.pt \
 MODEL_DEVICE=cpu \
 PORT=9000 \
 python api.py
@@ -314,7 +303,7 @@ The final ONNX model can be mounted into the container at runtime, or baked into
 
 The 0-5 severity masks are generated from annotated corrosion foreground pixels. The conversion uses HSI / HSV color cues, red-brown corrosion tendency, brightness, saturation, texture strength, and KMeans clustering. Clusters are sorted from slight to critical corrosion based on darkness, saturation, red-brown tendency, and local texture.
 
-Negative samples use all-zero masks and are treated as background only. They are not strongly augmented by default, so they suppress false positives without overwhelming positive corrosion recall.
+Generalization is improved by mixing the original ship corrosion images with an external corrosion condition-state dataset and applying synchronized image/mask augmentation. The current training flow intentionally avoids all-black random negative samples because they can make the model over-conservative on out-of-dataset corrosion images.
 
 ---
 
@@ -333,7 +322,7 @@ Adjust batch size, workers, and learning rate according to GPU memory.
 
 ## Future Improvements
 
-- Add curated hard negatives from real shipyard scenes.
+- Add manually reviewed external corrosion domains.
 - Add manual severity review tooling for classes `1-5`.
 - Add calibration plots for foreground probability threshold selection.
 - Add lightweight quantized ONNX / MNN / TensorRT variants for embedded deployment.

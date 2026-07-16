@@ -319,7 +319,7 @@ def main():
     parser.add_argument("--include-overlay", action="store_true")
     parser.add_argument("--threshold", type=float, help="Foreground probability-sum threshold.")
     parser.add_argument("--min-area-percent", type=float, help="Suppress detections below this image area percent.")
-    parser.add_argument("--background-margin", type=float, help="Allow foreground mass to be this margin above background; negative is more sensitive.")
+    parser.add_argument("--background-margin", type=float, help="Foreground mass margin relative to background; lower values are more sensitive.")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=9100)

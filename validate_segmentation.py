@@ -3,7 +3,7 @@ import argparse
 
 from data import build_dataloaders
 from engine import evaluate
-from loss import CrossEntropySegmentationCriterion, MulticlassSegmentationCriterion, SegmentationCriterion
+from loss import MulticlassSegmentationCriterion, SegmentationCriterion
 from model import build_model
 from utils import get_device, seed_everything
 from utils.checkpoint import infer_model_cfg_from_state_dict, load_checkpoint
@@ -12,16 +12,12 @@ from utils.checkpoint import infer_model_cfg_from_state_dict, load_checkpoint
 def metric_type_for_arch(arch, num_classes=2):
     if int(num_classes) > 2:
         return "multiclass"
-    if str(arch).lower().replace("_", "-") in {"unet", "u-net"}:
-        return "unet"
     return "segmentation"
 
 
 def build_criterion_for_arch(arch, cfg, num_classes=1):
     if int(num_classes) > 2:
         return MulticlassSegmentationCriterion(**cfg.get("loss", {}))
-    if str(arch).lower().replace("_", "-") in {"unet", "u-net"}:
-        return CrossEntropySegmentationCriterion()
     return SegmentationCriterion(**cfg.get("loss", {}))
 
 
@@ -52,7 +48,7 @@ def main():
     if boundary_tolerance is None:
         boundary_tolerance = cfg.get("eval", {}).get("boundary_tolerance", 3)
     metric_type = metric_type_for_arch(arch, num_classes=num_classes)
-    if metric_type != "unet" and int(num_classes) <= 2:
+    if int(num_classes) <= 2:
         metric_type = cfg.get("eval", {}).get("metric_type", metric_type)
     metrics = evaluate(
         model,

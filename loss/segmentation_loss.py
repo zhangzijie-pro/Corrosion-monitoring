@@ -76,27 +76,6 @@ class SegmentationCriterion(nn.Module):
         return loss, parts
 
 
-class CrossEntropySegmentationCriterion(nn.Module):
-    """Cross entropy loss adapter for class-index segmentation targets."""
-
-    def __init__(self, **kwargs):
-        super().__init__()
-        self.loss = nn.CrossEntropyLoss(**kwargs)
-
-    def forward(self, outputs, targets):
-        logits = outputs["out"] if isinstance(outputs, dict) else outputs
-        if logits.shape[-2:] != targets.shape[-2:]:
-            logits = F.interpolate(logits, size=targets.shape[-2:], mode="bilinear", align_corners=False)
-        if targets.ndim == 4 and targets.shape[1] == 1:
-            targets = (targets[:, 0] > 0.5).long()
-        elif targets.ndim == 4:
-            targets = torch.argmax(targets, dim=1).long()
-        else:
-            targets = targets.long()
-        loss = self.loss(logits, targets)
-        return loss, {"loss_ce": loss.detach(), "loss": loss.detach()}
-
-
 class MulticlassSegmentationCriterion(nn.Module):
     """Combined multiclass loss for imbalanced semantic corrosion masks."""
 

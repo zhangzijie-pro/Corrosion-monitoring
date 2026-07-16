@@ -70,3 +70,80 @@ class SegmentationMeter:
             "balanced_accuracy": 0.5 * (recall + specificity),
             "boundary_f1": boundary_f1,
         }
+
+
+class MulticlassSegmentationMeter:
+    """Confusion-matrix metrics for indexed 0..N semantic segmentation masks."""
+
+    def __init__(self, num_classes=6, threshold=0.5):
+        self.num_classes = int(num_classes)
+        self.threshold = float(threshold)
+        self.reset()
+
+    def reset(self):
+        self.confusion = torch.zeros((self.num_classes, self.num_classes), dtype=torch.float64)
+
+    @torch.no_grad()
+    def update(self, logits, targets):
+        if logits.shape[-2:] != targets.shape[-2:]:
+            logits = F.interpolate(logits, size=targets.shape[-2:], mode="bilinear", align_corners=False)
+        probs = torch.softmax(logits, dim=1)
+        if logits.shape[1] > 2:
+            background = probs[:, 0]
+            foreground = probs[:, 1:].sum(dim=1)
+            foreground_class = torch.argmax(probs[:, 1:], dim=1) + 1
+            preds = torch.where((foreground >= self.threshold) & (foreground >= background), foreground_class, 0)
+        else:
+            preds = torch.argmax(probs, dim=1)
+        if targets.ndim == 4 and targets.shape[1] == 1:
+            targets = targets[:, 0]
+        elif targets.ndim == 4:
+            targets = torch.argmax(targets, dim=1)
+        targets = targets.long().clamp(0, self.num_classes - 1)
+        preds = preds.long().clamp(0, self.num_classes - 1)
+        encoded = targets.reshape(-1) * self.num_classes + preds.reshape(-1)
+        counts = torch.bincount(encoded, minlength=self.num_classes * self.num_classes)
+        self.confusion += counts.reshape(self.num_classes, self.num_classes).cpu().to(torch.float64)
+
+    def compute(self):
+        eps = 1e-7
+        cm = self.confusion
+        tp = torch.diag(cm)
+        support = cm.sum(dim=1)
+        predicted = cm.sum(dim=0)
+        total = cm.sum().clamp_min(eps)
+        union = support + predicted - tp
+        iou = tp / union.clamp_min(eps)
+        precision = tp / predicted.clamp_min(eps)
+        recall = tp / support.clamp_min(eps)
+        f1 = 2.0 * precision * recall / (precision + recall).clamp_min(eps)
+        present = support > 0
+        foreground_present = present.clone()
+        if foreground_present.numel() > 0:
+            foreground_present[0] = False
+        foreground_iou = iou[foreground_present]
+        present_iou = iou[present]
+        binary_tp = cm[1:, 1:].sum()
+        binary_fp = cm[0, 1:].sum()
+        binary_fn = cm[1:, 0].sum()
+        binary_precision = binary_tp / (binary_tp + binary_fp).clamp_min(eps)
+        binary_recall = binary_tp / (binary_tp + binary_fn).clamp_min(eps)
+        binary_iou = binary_tp / (binary_tp + binary_fp + binary_fn).clamp_min(eps)
+        binary_dice = 2.0 * binary_tp / (2.0 * binary_tp + binary_fp + binary_fn).clamp_min(eps)
+        return {
+            "Pixel Accuracy": float(tp.sum() / total),
+            "Foreground Binary IoU": float(binary_iou),
+            "Foreground Binary Dice": float(binary_dice),
+            "Foreground Binary Precision": float(binary_precision),
+            "Foreground Binary Recall": float(binary_recall),
+            "Mean Pixel Accuracy": float(recall[present].mean()) if present.any() else 0.0,
+            "Mean Intersection over Union(mIoU)": float(present_iou.mean()) if present_iou.numel() else 0.0,
+            "Mean Present Class IoU": float(present_iou.mean()) if present_iou.numel() else 0.0,
+            "Mean Foreground IoU": float(foreground_iou.mean()) if foreground_iou.numel() else 0.0,
+            "Mean F1 Score": float(f1[present].mean()) if present.any() else 0.0,
+            "Frequency Weighted Intersection over Union": float((support[present] * iou[present]).sum() / total) if present.any() else 0.0,
+            "Class IoU": [float(v) for v in iou],
+            "Class Precision": [float(v) for v in precision],
+            "Class Recall": [float(v) for v in recall],
+            "Class F1": [float(v) for v in f1],
+        }

@@ -1,6 +1,6 @@
 import torch
 
-from metrics import SegmentationMeter, UNetSegmentationMeter
+from metrics import MulticlassSegmentationMeter, SegmentationMeter
 from utils.torch_compat import autocast_for_device
 
 
@@ -41,10 +41,8 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion, device, amp=Fal
 
 
 def build_metric_meter(metric_type="segmentation", threshold=0.5, boundary_tolerance=3, num_classes=2):
-    if str(metric_type).lower() in {"unet", "unet_metrics"}:
-        return UNetSegmentationMeter(num_classes=num_classes, threshold=threshold)
     if str(metric_type).lower() in {"multiclass", "multi_class", "semantic"}:
-        return UNetSegmentationMeter(num_classes=num_classes, threshold=threshold)
+        return MulticlassSegmentationMeter(num_classes=num_classes, threshold=threshold)
     return SegmentationMeter(threshold=threshold, boundary_tolerance=boundary_tolerance)
 
 
